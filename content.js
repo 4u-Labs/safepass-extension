@@ -289,6 +289,15 @@ if (isSafePassWebPage) {
   let typeTimeout = null;
   const dismissedSet = new Set();
 
+  function shouldIgnoreCapture() {
+    if (!isExtensionValid()) return true;
+    if (isSafePassWebPage) return true;
+    const path = (window.location.pathname || '').toLowerCase();
+    if (path.includes('/authpass') || path.includes('/2fa')) return true;
+    if (document.querySelector('[data-safepass-ignore="true"]')) return true;
+    return false;
+  }
+
   function isValidUsernameString(str) {
     if (!str || typeof str !== 'string') return false;
     const s = str.trim();
