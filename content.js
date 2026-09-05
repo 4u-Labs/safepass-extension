@@ -248,8 +248,9 @@ if (isSafePassWebPage) {
 
 // ── 4. DETECTOR AUTOMÁTICO DE LOGIN & PROMPT PARA SALVAR SENHA ──
 (function setupPasswordCapture() {
-  // Ignora se estiver no próprio SafePass Web
-  if (isSafePassWebPage) {
+  // Ignora se estiver no próprio SafePass Web, no AuthPass ou se a página tiver data-safepass-ignore
+  const isAuthPassWebPage = window.location.pathname.includes('/authpass') || window.location.pathname.includes('/2fa');
+  if (isSafePassWebPage || isAuthPassWebPage || document.querySelector('[data-safepass-ignore="true"]')) {
     return;
   }
 
