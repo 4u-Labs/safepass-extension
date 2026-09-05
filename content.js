@@ -119,7 +119,14 @@ if (isExtensionValid()) {
   }
 }
 
+let isAutoFilling = false;
+let lastAutoFilledPassword = '';
+let userExplicitlyTypedPassword = false;
+
 function performAutoFill(username, password) {
+  isAutoFilling = true;
+  lastAutoFilledPassword = password;
+  userExplicitlyTypedPassword = false;
   let filledPass = false;
   let filledUser = false;
 
@@ -161,6 +168,10 @@ function performAutoFill(username, password) {
       filledUser = true;
     }
   }
+
+  setTimeout(() => {
+    isAutoFilling = false;
+  }, 400);
 
   return filledPass || filledUser;
 }
@@ -420,6 +431,7 @@ if (isSafePassWebPage) {
   // 1. Monitora digitação, colagem e alterações em campos de formulário
   ['input', 'change', 'paste', 'keyup'].forEach(evt => {
     document.addEventListener(evt, (e) => {
+      if (isAutoFilling) return;
       const target = e.target;
       if (!target) return;
 
@@ -429,7 +441,9 @@ if (isSafePassWebPage) {
 
       if (isPassField) {
         if (target.value && target.value.length >= 2) {
-          userExplicitlyTypedPassword = true;
+          if (!lastAutoFilledPassword || target.value !== lastAutoFilledPassword) {
+            userExplicitlyTypedPassword = true;
+          }
           sessionPassword = target.value;
           dismissedSet.clear();
           try {
@@ -529,44 +543,58 @@ if (isSafePassWebPage) {
   }
 
   function triggerCapture(form, passwordInput) {
+    if (shouldIgnoreCapture()) return;
     let passVal = (passwordInput && passwordInput.value) ? passwordInput.value : sessionPassword;
     if (!passVal || passVal.length < 1) return;
 
-    const username = findUsernameField(form, passwordInput) || sessionUsername;
+    // Se a senha for a que acabou de ser autopreenchida e o usuário não digitou outra: NÃO FAZ NADA!
+    if (lastAutoFilledPassword && lastAutoFilledPassword === passVal && !userExplicitlyTypedPassword) {
+      return;
+    }
+
+    const username = findUsernameField(form, passwordInput) || sessionUsername || 'admin';
     const cleanTitle = extractCleanServiceName(window.location.href, document.title);
     const domain = window.location.hostname.replace(/^www\./i, '').toLowerCase();
 
-    const cred = {
-      id: 'item_' + Date.now(),
-      type: 'login',
-      title: cleanTitle || domain,
-      url: window.location.href,
-      domain: domain,
-      username: username || 'admin',
-      password: passVal,
-      notes: 'Salvo via extensão SafePass.',
-      favorite: false,
-      createdAt: Date.now()
-    };
-
-    lastCaptured = cred;
-
     if (!isExtensionValid()) return;
-
-    // Salva imediatamente para garantir 100% que a senha não seja perdida
-    saveCredentialDirectly(cred, true);
 
     chrome.storage.local.get(['safepass_unlocked_vault_cache'], (res) => {
       if (chrome.runtime.lastError || !isExtensionValid()) return;
       const cache = res['safepass_unlocked_vault_cache'] || [];
 
-      // Verifica se é atualização de senha
+      // Procura se essa credencial já existe no cofre
       const existingUserMatch = cache.find(item => {
-        const uMatch = (item.username || '').trim().toLowerCase() === (cred.username || '').trim().toLowerCase();
-        return uMatch && isDomainMatch(item, cred.domain);
+        const uMatch = (item.username || '').trim().toLowerCase() === (username || '').trim().toLowerCase();
+        return uMatch && isDomainMatch(item, domain);
       });
 
-      cred.isUpdate = !!existingUserMatch;
+      // 1. Se o login já existe e a senha é EXATAMENTE a mesma do cofre: NÃO FAZ NADA!
+      if (existingUserMatch && existingUserMatch.password === passVal) {
+        lastCaptured = null;
+        sessionPassword = '';
+        return;
+      }
+
+      const cred = {
+        id: existingUserMatch ? existingUserMatch.id : ('item_' + Date.now()),
+        type: 'login',
+        title: existingUserMatch ? existingUserMatch.title : (cleanTitle || domain),
+        url: window.location.href,
+        domain: domain,
+        username: username,
+        password: passVal,
+        notes: existingUserMatch ? (existingUserMatch.notes || '') : 'Salvo via extensão SafePass.',
+        favorite: existingUserMatch ? !!existingUserMatch.favorite : false,
+        createdAt: existingUserMatch ? (existingUserMatch.createdAt || Date.now()) : Date.now(),
+        isUpdate: !!existingUserMatch
+      };
+
+      lastCaptured = cred;
+
+      // Salva a credencial atualizada ou nova
+      saveCredentialDirectly(cred, false);
+
+      // Exibe o prompt apenas se for realmente nova conta ou senha alterada
       showSavePasswordPrompt(cred);
     });
   }
