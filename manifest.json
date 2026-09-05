@@ -1,0 +1,38 @@
+{
+   "action": {
+      "default_icon": {
+         "128": "icon-128.png",
+         "16": "icon-16.png",
+         "48": "icon-48.png"
+      },
+      "default_popup": "popup.html",
+      "default_title": "SafePass - Gerenciador de Senhas"
+   },
+   "author": "4U.IA.BR (contato@4u.ia.br)",
+   "background": {
+      "service_worker": "background.js"
+   },
+   "content_scripts": [ {
+      "all_frames": true,
+      "js": [ "content.js" ],
+      "matches": [ "\u003Call_urls>" ],
+      "run_at": "document_idle"
+   } ],
+   "description": "Cofre de senhas com criptografia militar Zero-Knowledge (AES-256), preenchimento automático inteligente e sincronização segura.",
+   "host_permissions": [ "\u003Call_urls>" ],
+   "icons": {
+      "128": "icon-128.png",
+      "16": "icon-16.png",
+      "48": "icon-48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhYTBvkKSZfrtWruQz1M6sz5GV1l9k9RYDYkq1H9PhgSoh1aNSiJ2uST8+C0VTox59A7d6FGBc2aNrU4uccTcwos0Z+f8fvNAyqGHfhb0mmXzSUMrAjfJYJMjGdFrL5L4JTFOqhBJc9QNUuyHUCtTUQyXXkIeOSMllf82CV2+D9SpKo9RQSdghNq3AwJ5CUsI4vpy8WxjJGbIQFDRq1Ol+FfR1KbsX8VvKjguZSALxjcULDevtJTs92cYc/RK2tjAvGBeWd0vpjozgexh4dVjFugO3aG8HiRnGjqWQV6lnDtzLEYFRVDQy5H+GZi704Hs+UjnqOhHo4YvDSLpz7O8QIDAQAB",
+   "manifest_version": 3,
+   "name": "SafePass — Gerenciador de Senhas Zero-Knowledge",
+   "permissions": [ "storage", "activeTab", "scripting" ],
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "2.0.0",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "icon-16.png", "icon-48.png", "icon-128.png", "icon-192.png" ]
+   } ]
+}
