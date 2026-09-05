@@ -192,20 +192,37 @@ function setNativeValue(element, value) {
 const isSafePassWebPage = (window.location.pathname.includes('/safepass') || window.location.pathname.includes('/safebox'));
 
 if (isSafePassWebPage) {
-  const syncFromWebApp = () => {
+  const syncBiDirectional = () => {
     if (!isExtensionValid()) return;
     try {
       const webVault = localStorage.getItem('safepass_encrypted_vault');
       const cloudToken = localStorage.getItem('safepass_cloud_token');
       const cloudUser = localStorage.getItem('safepass_cloud_user');
 
-      if (webVault && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.set({
-          'safepass_encrypted_vault': webVault,
-          'safepass_cloud_token': cloudToken || '',
-          'safepass_cloud_user': cloudUser || ''
-        });
-      }
+      chrome.storage.local.get(['safepass_encrypted_vault', 'safepass_cloud_token', 'safepass_cloud_user'], (res) => {
+        if (chrome.runtime.lastError || !isExtensionValid()) return;
+        const extVault = res['safepass_encrypted_vault'];
+        const extToken = res['safepass_cloud_token'];
+        const extUser = res['safepass_cloud_user'];
+
+        if (webVault && webVault !== 'null' && webVault.length > 20) {
+          // WebApp tem cofre -> sincroniza para a extensão
+          chrome.storage.local.set({
+            'safepass_encrypted_vault': webVault,
+            'safepass_cloud_token': cloudToken || extToken || '',
+            'safepass_cloud_user': cloudUser || extUser || ''
+          });
+        } else if (extVault && extVault !== 'null' && extVault.length > 20) {
+          // Extensão tem cofre, mas WebApp está vazio -> sincroniza para o WebApp!
+          localStorage.setItem('safepass_encrypted_vault', extVault);
+          if (extToken) localStorage.setItem('safepass_cloud_token', extToken);
+          if (extUser) localStorage.setItem('safepass_cloud_user', extUser);
+          window.dispatchEvent(new Event('storage'));
+          if (typeof window.checkVaultStatus === 'function') {
+            window.checkVaultStatus();
+          }
+        }
+      });
     } catch(e) {}
   };
 
@@ -224,7 +241,7 @@ if (isSafePassWebPage) {
   };
 
   // Sincroniza ao carregar a página e em qualquer alteração de dados
-  syncFromWebApp();
+  syncBiDirectional();
   checkAndInjectPending();
   const pollInterval = setInterval(() => {
     if (!isExtensionValid()) {
@@ -234,8 +251,8 @@ if (isSafePassWebPage) {
     checkAndInjectPending();
   }, 2000);
 
-  window.addEventListener('storage', syncFromWebApp);
-  window.addEventListener('safepass_vault_updated', syncFromWebApp);
+  window.addEventListener('storage', syncBiDirectional);
+  window.addEventListener('safepass_vault_updated', syncBiDirectional);
   window.addEventListener('safepass_sync_cache', (e) => {
     if (!isExtensionValid()) return;
     try {
