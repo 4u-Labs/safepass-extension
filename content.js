@@ -544,11 +544,13 @@ if (isSafePassWebPage) {
 
   function triggerCapture(form, passwordInput) {
     if (shouldIgnoreCapture()) return;
-    let passVal = (passwordInput && passwordInput.value) ? passwordInput.value : sessionPassword;
-    if (!passVal || passVal.length < 1) return;
+    let passVal = (passwordInput && passwordInput.value) ? passwordInput.value : '';
+    if (!passVal || passVal.length < 2) return;
 
     // Se a senha for a que acabou de ser autopreenchida e o usuário não digitou outra: NÃO FAZ NADA!
     if (lastAutoFilledPassword && lastAutoFilledPassword === passVal && !userExplicitlyTypedPassword) {
+      sessionPassword = '';
+      lastCaptured = null;
       return;
     }
 
@@ -562,18 +564,24 @@ if (isSafePassWebPage) {
       if (chrome.runtime.lastError || !isExtensionValid()) return;
       const cache = res['safepass_unlocked_vault_cache'] || [];
 
-      // Procura se essa credencial já existe no cofre
+      // 1. Verifica se já existe QUALQUER credencial salva para este domínio com a MESMA senha
+      const samePasswordMatch = cache.find(item => {
+        return isDomainMatch(item, domain) && item.password === passVal;
+      });
+
+      if (samePasswordMatch) {
+        // A senha já é conhecida e salva no cofre para este domínio! Silencia completamente.
+        lastCaptured = null;
+        sessionPassword = '';
+        userExplicitlyTypedPassword = false;
+        return;
+      }
+
+      // 2. Procura se já existe credencial para este usuário neste domínio (Atualização vs Novo)
       const existingUserMatch = cache.find(item => {
         const uMatch = (item.username || '').trim().toLowerCase() === (username || '').trim().toLowerCase();
         return uMatch && isDomainMatch(item, domain);
       });
-
-      // 1. Se o login já existe e a senha é EXATAMENTE a mesma do cofre: NÃO FAZ NADA!
-      if (existingUserMatch && existingUserMatch.password === passVal) {
-        lastCaptured = null;
-        sessionPassword = '';
-        return;
-      }
 
       const cred = {
         id: existingUserMatch ? existingUserMatch.id : ('item_' + Date.now()),
@@ -591,9 +599,6 @@ if (isSafePassWebPage) {
 
       lastCaptured = cred;
 
-      // Salva a credencial atualizada ou nova
-      saveCredentialDirectly(cred, false);
-
       // Exibe o prompt apenas se for realmente nova conta ou senha alterada
       showSavePasswordPrompt(cred);
     });
@@ -602,11 +607,14 @@ if (isSafePassWebPage) {
   // 3. Escuta submit de formulários com campo de senha
   document.addEventListener('submit', (e) => {
     const form = e.target;
-    const pass = (form && form.querySelector) ? form.querySelector('input[type="password"]') : null;
-    triggerCapture(form, pass);
+    if (!form || !form.querySelector) return;
+    const pass = form.querySelector('input[type="password"]');
+    if (pass && pass.value && pass.value.length >= 2) {
+      triggerCapture(form, pass);
+    }
   }, true);
 
-  // 4. Escuta cliques em botões de ação/login (Ignora botões de Logout / Sair)
+  // 4. Escuta cliques em botões de ação/login (Ignora abas internas, menus e botões de Logout)
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('button, input[type="submit"], input[type="button"], a, [role="button"]');
     if (!btn) return;
@@ -618,39 +626,59 @@ if (isSafePassWebPage) {
     if (isLogoutButton) {
       userExplicitlyTypedPassword = false;
       sessionPassword = '';
+      lastCaptured = null;
       if (isExtensionValid()) {
         chrome.storage.local.remove('safepass_pending_prompt');
       }
       return;
     }
 
+    // Busca o campo de senha APENAS dentro do form do botão ou container imediato
     const form = btn.closest('form');
-    const pass = (form && form.querySelector('input[type="password"]')) || document.querySelector('input[type="password"]');
-    const passVal = (pass && pass.value) ? pass.value : sessionPassword;
-    if (!passVal || passVal.length < 3) return;
+    let pass = null;
+    if (form) {
+      pass = form.querySelector('input[type="password"]');
+    } else {
+      const container = btn.closest('div, section, main, [role="dialog"], [role="form"]');
+      if (container) {
+        pass = container.querySelector('input[type="password"]');
+      }
+    }
 
-    const isSameForm = form && pass && pass.closest('form') === form;
-    const isLoginButton = /entrar|login|log in|sign ?in|sign ?up|acessar|logar|autenticar|cadastrar|cadastro|salvar|conectar|submit|continuar|prosseguir|iniciar|iniciar sess[aã]o|criar|avançar|confirmar|next|começar|ok|enviar/i.test(btnText);
-    const isSubmitType = btn.getAttribute('type') === 'submit' || btn.tagName === 'BUTTON';
+    // Se NÃO houver campo de senha com valor preenchido na área deste botão, NÃO FAZ NADA!
+    if (!pass || !pass.value || pass.value.length < 2) {
+      return;
+    }
 
-    if (isSameForm || isLoginButton || isSubmitType || userExplicitlyTypedPassword) {
-      triggerCapture(form, pass);
+    // Se o campo estiver invisível (ex: modal fechado), ignora
+    if (pass.offsetParent === null && pass.type !== 'password') {
+      return;
+    }
+
+    const isLoginButton = /entrar|login|log in|sign ?in|sign ?up|acessar|logar|autenticar|cadastrar|cadastro|conectar|submit|iniciar sess[aã]o/i.test(btnText);
+    const isSubmitType = btn.getAttribute('type') === 'submit';
+
+    if (isLoginButton || isSubmitType || userExplicitlyTypedPassword) {
+      triggerCapture(form || pass.closest('form') || pass.parentElement, pass);
     }
   }, true);
 
   // 5. Escuta tecla Enter nos inputs de login
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      const pass = document.querySelector('input[type="password"]');
-      if ((pass && pass.value && pass.value.length >= 3) || (sessionPassword && sessionPassword.length >= 3)) {
-        triggerCapture(e.target.closest('form'), pass);
+      const target = e.target;
+      if (!target) return;
+      const form = target.closest('form');
+      const pass = form ? form.querySelector('input[type="password"]') : (target.type === 'password' ? target : null);
+      if (pass && pass.value && pass.value.length >= 2) {
+        triggerCapture(form || pass.closest('form') || pass.parentElement, pass);
       }
     }
   }, true);
 
-  // 6. Salva antes de descarregar a página caso haja redirecionamento
+  // 6. Salva antes de descarregar a página caso haja redirecionamento (APENAS se o usuário digitou uma nova senha)
   window.addEventListener('beforeunload', () => {
-    if (sessionPassword && sessionPassword.length >= 3 && isExtensionValid()) {
+    if (userExplicitlyTypedPassword && sessionPassword && sessionPassword.length >= 2 && isExtensionValid()) {
       const username = sessionUsername || 'admin';
       const cleanTitle = extractCleanServiceName(window.location.href, document.title);
       chrome.storage.local.set({
@@ -666,13 +694,6 @@ if (isSafePassWebPage) {
     }
   });
 
-  // 7. Monitora transições em Single Page Apps (SPA)
-  window.addEventListener('hashchange', () => {
-    if (sessionPassword && lastCaptured && lastCaptured.password && !dismissedSet.has(lastCaptured.password)) {
-      setTimeout(() => showSavePasswordPrompt(lastCaptured), 400);
-    }
-  });
-
   // 7. Verifica se há prompt pendente após redirecionamento de login
   if (isExtensionValid()) {
     chrome.storage.local.get(['safepass_pending_prompt', 'safepass_unlocked_vault_cache'], (res) => {
@@ -685,11 +706,9 @@ if (isSafePassWebPage) {
         if (p.domain && (curDomain.includes(p.domain) || p.domain.includes(curDomain))) {
           chrome.storage.local.remove('safepass_pending_prompt');
 
-          // Verifica no cache se o item já está 100% salvo e idêntico
+          // 1. Verifica no cache se o item já está salvo com a mesma senha para este domínio
           const exactMatch = cache.find(item => {
-            const uMatch = (item.username || '').trim().toLowerCase() === (p.username || '').trim().toLowerCase();
-            const pMatch = item.password === p.password;
-            return uMatch && pMatch && isDomainMatch(item, p.domain || curDomain);
+            return isDomainMatch(item, p.domain || curDomain) && item.password === p.password;
           });
 
           if (exactMatch) {
@@ -952,15 +971,16 @@ if (isSafePassWebPage) {
       const editedPass = shadow.getElementById('sp-edit-pass') ? shadow.getElementById('sp-edit-pass').value : (data.password || '');
 
       const toSave = {
-        id: 'item_' + Date.now(),
+        id: (data.id && data.id.startsWith('item_')) ? data.id : ('item_' + Date.now()),
         type: 'login',
         title: editedTitle,
         url: data.url || window.location.href,
-        domain: data.domain || window.location.hostname.replace(/^www\./i, ''),
+        domain: data.domain || window.location.hostname.replace(/^www\./i, '').toLowerCase(),
         username: editedUser,
         password: editedPass,
-        notes: 'Salvo via extensão SafePass.',
-        createdAt: Date.now()
+        notes: data.notes || 'Salvo via extensão SafePass.',
+        favorite: !!data.favorite,
+        createdAt: data.createdAt || Date.now()
       };
 
       try {
@@ -976,8 +996,8 @@ if (isSafePassWebPage) {
             let pending = res['safepass_pending_vault_items'] || [];
             let cache = res['safepass_unlocked_vault_cache'] || [];
 
-            pending = pending.filter(p => !(p.url === toSave.url && p.username === toSave.username));
-            cache = cache.filter(p => !(p.url === toSave.url && p.username === toSave.username));
+            pending = pending.filter(p => !(isDomainMatch(p, toSave.domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
+            cache = cache.filter(p => !(isDomainMatch(p, toSave.domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
 
             pending.unshift(toSave);
             cache.unshift(toSave);
