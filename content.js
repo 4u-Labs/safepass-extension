@@ -10,6 +10,50 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+function isDomainMatch(item, targetDomain) {
+  if (!item) return false;
+  const target = (targetDomain || '').replace(/^www\./i, '').toLowerCase();
+  const curPath = (window.location.pathname || '').toLowerCase();
+
+  const isSafePassAccount = (item.title || '').toLowerCase().includes('safepass') || (item.url || '').toLowerCase().includes('safepass');
+  if (isSafePassAccount) {
+    return curPath.includes('safepass') || curPath.includes('safebox');
+  }
+
+  if (item.url) {
+    try {
+      const itemUrl = item.url.startsWith('http') ? item.url : 'https://' + item.url;
+      const parsed = new URL(itemUrl);
+      const itemHost = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+      
+      if (itemHost === target || itemHost.endsWith('.' + target) || target.endsWith('.' + itemHost)) {
+        const itemPath = parsed.pathname.replace(/\/$/, '').toLowerCase();
+        if (itemPath && itemPath !== '/' && itemPath.length > 2) {
+          const firstSeg = itemPath.split('/').filter(Boolean)[0];
+          if (firstSeg && !curPath.includes(firstSeg)) {
+            return false;
+          }
+        }
+        return true;
+      }
+    } catch(e) {
+      if (item.url.toLowerCase().includes(target)) return true;
+    }
+  }
+
+  if (item.title) {
+    const t = item.title.toLowerCase();
+    if (t === target || t.includes(target)) return true;
+  }
+
+  if (item.domain) {
+    const d = item.domain.toLowerCase();
+    if (d === target || target.includes(d)) return true;
+  }
+
+  return false;
+}
+
 function isExtensionValid() {
   try {
     return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
@@ -1035,56 +1079,6 @@ if (isSafePassWebPage) {
     document.querySelectorAll('#__safepass_inline_dropdown, .__safepass_field_icon_btn').forEach(el => el.remove());
     setTimeout(scanAndAttachInputs, 300);
   });
-
-  function isDomainMatch(item, targetDomain) {
-    if (!item) return false;
-    const target = (targetDomain || '').replace(/^www\./i, '').toLowerCase();
-    const curPath = (window.location.pathname || '').toLowerCase();
-
-    // Se o item for a Conta SafePass Cloud / Cofre SafePass:
-    const isSafePassAccount = (item.title || '').toLowerCase().includes('safepass') || (item.url || '').toLowerCase().includes('safepass');
-    if (isSafePassAccount) {
-      // Só sugere a Conta SafePass se a página atual for do próprio SafePass
-      return curPath.includes('safepass') || curPath.includes('safebox');
-    }
-
-    // 1. Testa URL com path matching inteligente para sub-aplicações
-    if (item.url) {
-      try {
-        const itemUrl = item.url.startsWith('http') ? item.url : 'https://' + item.url;
-        const parsed = new URL(itemUrl);
-        const itemHost = parsed.hostname.replace(/^www\./i, '').toLowerCase();
-        
-        if (itemHost === target || itemHost.endsWith('.' + target) || target.endsWith('.' + itemHost)) {
-          // Se o item tem um path específico (ex: /loja/ ou /blog/) e a página atual também:
-          const itemPath = parsed.pathname.replace(/\/$/, '').toLowerCase();
-          if (itemPath && itemPath !== '/' && itemPath.length > 2) {
-            const firstSeg = itemPath.split('/').filter(Boolean)[0]; // 'loja', 'blog'
-            if (firstSeg && !curPath.includes(firstSeg)) {
-              return false; // Pertence a outro app no mesmo domínio
-            }
-          }
-          return true;
-        }
-      } catch(e) {
-        if (item.url.toLowerCase().includes(target)) return true;
-      }
-    }
-
-    // 2. Testa Título
-    if (item.title) {
-      const t = item.title.toLowerCase();
-      if (t === target || t.includes(target)) return true;
-    }
-
-    // 3. Testa Domínio do Item
-    if (item.domain) {
-      const d = item.domain.toLowerCase();
-      if (d === target || target.includes(d)) return true;
-    }
-
-    return false;
-  }
 
   function showInlineDropdown(input) {
     if (!input || !input.isConnected || !input.offsetParent) return;
