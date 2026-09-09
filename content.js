@@ -10,45 +10,101 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-function isDomainMatch(item, targetDomain) {
-  if (!item) return false;
-  const target = (targetDomain || '').replace(/^www\./i, '').toLowerCase();
-  const curPath = (window.location.pathname || '').toLowerCase();
-
-  const isSafePassAccount = (item.title || '').toLowerCase().includes('safepass') || (item.url || '').toLowerCase().includes('safepass');
-  if (isSafePassAccount) {
-    return curPath.includes('safepass') || curPath.includes('safebox');
+function getAppPathKey(urlStr, titleStr = '', userStr = '') {
+  if (urlStr) {
+    try {
+      const u = new URL((urlStr && urlStr.startsWith('http')) ? urlStr : 'https://' + (urlStr || ''));
+      const segs = u.pathname.split('/').filter(Boolean);
+      const clean = segs.filter(s => !s.match(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i));
+      if (clean.length > 0) {
+        if (clean[0] === 'app' && clean.length > 1) return 'app/' + clean[1].toLowerCase();
+        return clean[0].toLowerCase();
+      }
+    } catch(e) {}
   }
 
-  if (item.url) {
-    try {
-      const itemUrl = item.url.startsWith('http') ? item.url : 'https://' + item.url;
-      const parsed = new URL(itemUrl);
-      const itemHost = parsed.hostname.replace(/^www\./i, '').toLowerCase();
-      
-      if (itemHost === target || itemHost.endsWith('.' + target) || target.endsWith('.' + itemHost)) {
-        const itemPath = parsed.pathname.replace(/\/$/, '').toLowerCase();
-        if (itemPath && itemPath !== '/' && itemPath.length > 2) {
-          const firstSeg = itemPath.split('/').filter(Boolean)[0];
-          if (firstSeg && !curPath.includes(firstSeg)) {
-            return false;
-          }
-        }
-        return true;
-      }
-    } catch(e) {
-      if (item.url.toLowerCase().includes(target)) return true;
+  const text = ((urlStr || '') + ' ' + (titleStr || '') + ' ' + (userStr || '')).toLowerCase();
+  
+  const pathMatch = text.match(/(?:\.br|\.com|\.net|\.org|\.io)?\/([a-z0-9_-]+(?:\/[a-z0-9_-]+)?)/i);
+  if (pathMatch && pathMatch[1]) {
+    const rawP = pathMatch[1].toLowerCase();
+    const cleanP = rawP.replace(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i, '').replace(/\/$/, '');
+    if (cleanP && !cleanP.includes('.') && cleanP.length > 1) {
+      if (cleanP.startsWith('app/') || !cleanP.includes('/')) return cleanP;
     }
   }
 
-  if (item.title) {
-    const t = item.title.toLowerCase();
-    if (t === target || t.includes(target)) return true;
+  const appHints = ['zap', 'lovechat', 'loja', 'ofertas', 'safepass', 'chat', 'bot', 'store', 'mail', 'blog'];
+  for (const hint of appHints) {
+    if (text.includes('(' + hint + ')') || text.includes('— ' + hint) || text.includes('- ' + hint) || text.includes('/' + hint) || text.includes(' ' + hint)) {
+      return (hint === 'zap' || hint === 'lovechat') ? ('app/' + hint) : hint;
+    }
   }
 
-  if (item.domain) {
-    const d = item.domain.toLowerCase();
-    if (d === target || target.includes(d)) return true;
+  return '';
+}
+
+function isDomainMatch(item, targetDomainOrUrl) {
+  if (!item) return false;
+  
+  let targetHost = '';
+  let targetPathKey = '';
+  
+  try {
+    const tUrl = (targetDomainOrUrl && targetDomainOrUrl.startsWith('http')) ? targetDomainOrUrl : 'https://' + (targetDomainOrUrl || '');
+    const pTarget = new URL(tUrl);
+    targetHost = pTarget.hostname.replace(/^www\./i, '').toLowerCase();
+    targetPathKey = getAppPathKey(tUrl);
+  } catch(e) {
+    targetHost = (targetDomainOrUrl || '').replace(/^www\./i, '').toLowerCase();
+  }
+
+  if (!targetPathKey && typeof window !== 'undefined' && window.location && window.location.href) {
+    targetPathKey = getAppPathKey(window.location.href);
+  }
+
+  const itemUrl = item.url ? (item.url.startsWith('http') ? item.url : 'https://' + item.url) : '';
+  let itemHost = '';
+  let itemPathKey = '';
+  
+  if (itemUrl) {
+    try {
+      const pItem = new URL(itemUrl);
+      itemHost = pItem.hostname.replace(/^www\./i, '').toLowerCase();
+      itemPathKey = getAppPathKey(itemUrl, item.title, item.username);
+    } catch(e) {
+      itemHost = (item.url || '').toLowerCase();
+      itemPathKey = getAppPathKey('', item.title, item.username);
+    }
+  } else if (item.domain) {
+    itemHost = item.domain.replace(/^www\./i, '').toLowerCase();
+    itemPathKey = getAppPathKey('', item.title, item.username);
+  } else {
+    itemPathKey = getAppPathKey('', item.title, item.username);
+  }
+
+  const isSafePassAccount = (item.title || '').toLowerCase().includes('safepass') || itemUrl.toLowerCase().includes('safepass');
+  if (isSafePassAccount) {
+    const curPath = (typeof window !== 'undefined' && window.location ? window.location.pathname : '').toLowerCase();
+    return curPath.includes('safepass') || curPath.includes('safebox');
+  }
+
+  const hostMatches = (itemHost && targetHost) && (itemHost === targetHost || itemHost.endsWith('.' + targetHost) || targetHost.endsWith('.' + itemHost));
+  
+  if (hostMatches) {
+    // If target is inside a specific sub-app (e.g. app/zap, loja)
+    if (targetPathKey) {
+      if (!itemPathKey) return false;
+      const normTarget = targetPathKey.replace(/^app\//, '');
+      const normItem = itemPathKey.replace(/^app\//, '');
+      return normTarget === normItem || targetPathKey === itemPathKey;
+    }
+    
+    // If target has NO specific sub-app path (root domain)
+    if (!targetPathKey) {
+      if (itemPathKey) return false;
+      return true;
+    }
   }
 
   return false;
@@ -119,6 +175,31 @@ if (isExtensionValid()) {
   }
 }
 
+function isElementVisible(el) {
+  if (!el || el.disabled || el.readOnly) return false;
+  if (el.type === 'hidden') return false;
+  if (el.offsetParent === null) return false;
+  try {
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  } catch(e) {
+    return el.offsetParent !== null;
+  }
+}
+
+function isSearchOrNonAuthField(el) {
+  if (!el) return true;
+  if (el.type === 'search') return true;
+  if (el.getAttribute('data-1p-ignore') !== null || el.getAttribute('data-lpignore') === 'true' || el.getAttribute('data-bwignore') === 'true' || el.getAttribute('data-safepass-ignore') === 'true') return true;
+  
+  const attr = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('autocomplete') || '')).toLowerCase();
+  
+  const searchKeywords = /(search|busca|pesquis|filtr|filtro|query|keyword|buscar|carrinho|cart|pedido|item|produto|cliente|cupom|coupon|destaque|quantidade|preco|valor|total|obs|observacao)/i;
+  return searchKeywords.test(attr);
+}
+
 let isAutoFilling = false;
 let lastAutoFilledPassword = '';
 let userExplicitlyTypedPassword = false;
@@ -133,37 +214,42 @@ function performAutoFill(username, password) {
   // Remove qualquer dropdown aberto na hora do preenchimento
   document.querySelectorAll('#__safepass_inline_dropdown').forEach(el => el.remove());
 
-  // 1. Preencher campo de senha
-  let passInput = document.querySelector('input#pass, input[name="pass"], input[data-testid="royal_pass"]');
-  if (!passInput) {
-    const passwordInputs = Array.from(document.querySelectorAll('input[type="password"]')).filter(el => {
-      return el.offsetParent !== null && !el.disabled && !el.readOnly;
-    });
-    if (passwordInputs.length > 0) passInput = passwordInputs[0];
+  // 1. Preencher campo de senha - APENAS se for visível!
+  const passwordInputs = Array.from(document.querySelectorAll('input[type="password"]')).filter(isElementVisible);
+  if (passwordInputs.length === 0) {
+    // NUNCA preenche usuário em páginas sem campo de senha visível
+    isAutoFilling = false;
+    return false;
   }
 
+  const passInput = passwordInputs[0];
   if (passInput && password) {
     setNativeValue(passInput, password);
     filledPass = true;
   }
 
-  // 2. Preencher campo de usuário / email
-  if (username) {
-    let userInput = document.querySelector('input#email, input[name="email"], input[data-testid="royal_email"]');
-    if (!userInput) {
-      const allInputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])')).filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly);
+  // 2. Preencher campo de usuário / email estritamente associado ao form da senha
+  if (username && passInput) {
+    const root = passInput.closest('form, [role="dialog"], [role="form"], .modal, .auth-box, .login-box, .card, main') || document.body;
+    const candidateInputs = Array.from(root.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'))
+      .filter(el => isElementVisible(el) && !isSearchOrNonAuthField(el));
 
-      userInput = allInputs.find(i => {
-        const attr = ((i.name || '') + ' ' + (i.id || '') + ' ' + (i.placeholder || '') + ' ' + (i.getAttribute('aria-label') || '') + ' ' + (i.getAttribute('autocomplete') || '')).toLowerCase();
-        return attr.includes('email') || attr.includes('user') || attr.includes('login') || attr.includes('usuario') || attr.includes('ident') || attr.includes('phone') || attr.includes('tel') || i.type === 'email' || i.type === 'tel';
-      });
+    let userInput = candidateInputs.find(i => {
+      if (i.type === 'email' || i.type === 'tel') return true;
+      const attr = ((i.name || '') + ' ' + (i.id || '') + ' ' + (i.placeholder || '') + ' ' + (i.getAttribute('aria-label') || '') + ' ' + (i.getAttribute('autocomplete') || '')).toLowerCase();
+      return attr.includes('email') || attr.includes('user') || attr.includes('login') || attr.includes('usuario') || attr.includes('ident');
+    });
 
-      if (!userInput && allInputs.length > 0) {
-        userInput = allInputs[0];
+    if (!userInput && candidateInputs.length > 0) {
+      const allInRoot = Array.from(root.querySelectorAll('input'));
+      const passIdx = allInRoot.indexOf(passInput);
+      const beforePass = candidateInputs.filter(i => allInRoot.indexOf(i) < passIdx);
+      if (beforePass.length > 0) {
+        userInput = beforePass[beforePass.length - 1];
       }
     }
 
-    if (userInput) {
+    if (userInput && !isSearchOrNonAuthField(userInput)) {
       setNativeValue(userInput, username);
       filledUser = true;
     }
@@ -283,11 +369,15 @@ if (isSafePassWebPage) {
   }
 
   let sessionUsername = '';
+  let sessionUsernameFromAuth = false;
   let sessionPassword = '';
   let userExplicitlyTypedPassword = false;
+  let activePasswordInput = null;
+  let activeAuthForm = null;
   let lastCaptured = null;
-  let typeTimeout = null;
   const dismissedSet = new Set();
+
+  const NON_AUTH_REGEX = /\b(pedido|pedidos|carrinho|cart|checkout|pagar|pagamento|comprar|compra|item|itens|cabide|cabides|peca|pecas|produto|produtos|quantidade|qtd|adicionar|add|remover|excluir|delete|imprimir|print|comprovante|buscar|busca|search|filtrar|filtro|pesquisar|whatsapp|whats|zap|mensagem|msg|enviar|download|exportar|salvar cliente|novo cliente|editar cliente|cliente|clientes|salvar rascunho|rascunho|atualizar pedido|salvar pedido)\b/i;
 
   function shouldIgnoreCapture() {
     if (!isExtensionValid()) return true;
@@ -301,44 +391,87 @@ if (isSafePassWebPage) {
   function isValidUsernameString(str) {
     if (!str || typeof str !== 'string') return false;
     const s = str.trim();
-    if (s.length < 3 || s.length > 60) return false;
-    // Rejeita datas (ex: 2026-07-30, 29/08/2026), valores monetários e números puros curtos
+    if (s.length < 1 || s.length > 80) return false;
+    // Rejeita datas ou valores monetários puros
     if (/^\d{4}-\d{2}-\d{2}$/.test(s) || /^\d{2}\/\d{2}\/\d{4}$/.test(s)) return false;
     if (/^(r\$|usd|\$|€)\s*[\d.,]+/i.test(s)) return false;
     return true;
   }
 
+  function isExplicitUsernameField(el) {
+    if (!el || el.disabled || el.readOnly || el.type === 'hidden') return false;
+    if (el.type === 'email') return true;
+    const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if (autocomplete === 'username' || autocomplete === 'email') return true;
+    
+    const attr = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('data-qa') || '')).toLowerCase();
+    const isUserKeyword = /(?:^|[_\-.])(user|username|login|email|usuario|conta|cpf|matricula|identificador)(?:[_\-.]|$)/i.test(attr) ||
+                          attr.includes('e-mail') || attr.includes('usuario') || attr.includes('login') || attr.includes('username');
+    
+    const isExcluded = NON_AUTH_REGEX.test(attr) || /(search|busca|cliente|customer|item|pedido|cabide|peca|produto|preco|valor|total|obs|observacao|endereco|rua|bairro|cidade|cep|desc|telefone|phone|whats)/i.test(attr);
+    
+    return isUserKeyword && !isExcluded;
+  }
+
+  function isPasswordField(el) {
+    if (!el || el.disabled || el.readOnly || el.type === 'hidden') return false;
+    if (el.type === 'password') return true;
+    const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if (autocomplete === 'current-password' || autocomplete === 'new-password') return true;
+    const attr = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '')).toLowerCase();
+    return /(?:^|[_\-.])(password|passwd|senha|pass_hash|user_pass)(?:[_\-.]|$)/i.test(attr) && el.tagName === 'INPUT' && (el.type === 'text' || !el.type);
+  }
+
+  function isNonAuthButton(btn) {
+    if (!btn) return false;
+    const text = ((btn.innerText || '') + ' ' + (btn.id || '') + ' ' + (btn.className || '') + ' ' + (btn.getAttribute('aria-label') || '') + ' ' + (btn.getAttribute('data-action') || '')).toLowerCase();
+    return NON_AUTH_REGEX.test(text);
+  }
+
   function findUsernameField(form, passwordInput) {
-    if (sessionUsername && isValidUsernameString(sessionUsername)) {
+    const root = form || (passwordInput ? passwordInput.closest('form, [role="dialog"], [role="form"], .modal, .auth-box, .login-box, .login-container') : null);
+    
+    if (root) {
+      const inputs = Array.from(root.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])')).filter(el => {
+        if (el.offsetParent === null && el.type !== 'text' && el.type !== 'email') return false;
+        if (isPasswordField(el)) return false;
+        return true;
+      });
+      
+      // 1. Busca por campos explicitamente de login / e-mail / usuário
+      let explicitUser = inputs.find(i => isExplicitUsernameField(i) && i.value && isValidUsernameString(i.value));
+      if (explicitUser) {
+        return explicitUser.value.trim();
+      }
+
+      // 2. Busca por qualquer input que contenha um e-mail válido
+      let emailInput = inputs.find(i => i.value && i.value.includes('@') && isValidUsernameString(i.value) && !NON_AUTH_REGEX.test(i.name || ''));
+      if (emailInput) {
+        return emailInput.value.trim();
+      }
+
+      // 3. Pega o primeiro input de texto do form antes da senha, se não for campo excluído
+      if (passwordInput && inputs.length > 0) {
+        const allInputsInRoot = Array.from(root.querySelectorAll('input'));
+        const passIndex = allInputsInRoot.indexOf(passwordInput);
+        const candidate = inputs.find(i => {
+          const idx = allInputsInRoot.indexOf(i);
+          const attr = ((i.name || '') + ' ' + (i.id || '') + ' ' + (i.placeholder || '')).toLowerCase();
+          const isExcluded = NON_AUTH_REGEX.test(attr) || /(search|busca|cliente|customer|item|pedido|cabide|peca|produto|preco|valor|total|obs|observacao|endereco|rua|bairro|cidade|cep|desc)/i.test(attr);
+          return (passIndex === -1 || idx < passIndex) && i.value && isValidUsernameString(i.value) && !isExcluded;
+        });
+        if (candidate) {
+          return candidate.value.trim();
+        }
+      }
+    }
+
+    // 4. Fallback para sessão se foi digitado num campo autêntico
+    if (sessionUsername && sessionUsernameFromAuth && isValidUsernameString(sessionUsername)) {
       return sessionUsername;
     }
 
-    const root = form || (passwordInput ? passwordInput.closest('form') : null) || document;
-    const inputs = Array.from(root.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])')).filter(el => el.offsetParent !== null && !el.disabled);
-    
-    // 1. Busca por campos explícitos de login / e-mail / usuário
-    let userInput = inputs.find(i => {
-      const name = ((i.name || '') + ' ' + (i.id || '') + ' ' + (i.placeholder || '') + ' ' + (i.getAttribute('autocomplete') || '') + ' ' + (i.getAttribute('data-qa') || '')).toLowerCase();
-      return name.includes('user') || name.includes('login') || name.includes('email') || name.includes('usuario') || name.includes('ident') || name.includes('cpf') || i.type === 'email';
-    });
-
-    if (userInput && userInput.value && isValidUsernameString(userInput.value)) {
-      return userInput.value.trim();
-    }
-
-    // 2. Busca por qualquer input que contenha um e-mail válido
-    let emailInput = inputs.find(i => i.value && i.value.includes('@') && isValidUsernameString(i.value));
-    if (emailInput) {
-      return emailInput.value.trim();
-    }
-
-    // 3. Busca por identificadores de perfil na página
-    const userBadge = document.querySelector('[data-user], .user-name, .username, #username, .admin-user');
-    if (userBadge && userBadge.textContent && isValidUsernameString(userBadge.textContent)) {
-      return userBadge.textContent.trim();
-    }
-
-    return (sessionUsername && isValidUsernameString(sessionUsername)) ? sessionUsername : 'admin';
+    return 'admin';
   }
 
   function extractCleanServiceName(urlStr, rawTitle) {
@@ -397,8 +530,7 @@ if (isSafePassWebPage) {
         'notion.so': 'Notion',
         'slack.com': 'Slack',
         'trello.com': 'Trello',
-        'dropbox.com': 'Dropbox',
-        '4u.ia.br': '4u.ia.br'
+        'dropbox.com': 'Dropbox'
       };
 
       for (const [domain, brand] of Object.entries(brandMap)) {
@@ -421,255 +553,241 @@ if (isSafePassWebPage) {
       }
 
       // Descarta subdomínios genéricos como account, auth, login, id, etc.
-      const genericSubs = new Set(['account', 'accounts', 'auth', 'login', 'sso', 'id', 'my', 'myaccount', 'secure', 'app', 'portal', 'web', 'mail', 'admin', 'api', 'identity', 'connect', 'signin', 'oauth', 'm']);
+      const genericSubs = new Set(['account', 'accounts', 'auth', 'login', 'sso', 'id', 'my', 'myaccount', 'secure', 'portal', 'web', 'mail', 'admin', 'api', 'identity', 'connect', 'signin', 'oauth', 'm']);
       let parts = host.split('.');
       while (parts.length > 2 && genericSubs.has(parts[0])) {
         parts.shift();
       }
       const baseName = parts[0] || host.split('.')[0];
-      return baseName.charAt(0).toUpperCase() + baseName.slice(1);
+      const formattedHost = baseName.charAt(0).toUpperCase() + baseName.slice(1);
+
+      const pathSegments = u.pathname.split('/').filter(Boolean);
+      const cleanSegments = pathSegments.filter(s => !s.match(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i));
+      const subApp = cleanSegments.length > 0 ? (cleanSegments[0] === 'app' && cleanSegments[1] ? cleanSegments[1] : cleanSegments[0]) : '';
+
+      if (subApp) {
+        const formattedSubApp = subApp.charAt(0).toUpperCase() + subApp.slice(1);
+        return `${formattedHost} — ${formattedSubApp}`;
+      }
+
+      return formattedHost;
     } catch(e) {
       return 'Login Web';
     }
   }
 
   function isCurrentSiteDismissed() {
-    return false; // Permite sempre que uma nova senha seja capturada
+    return false;
   }
 
-  // 1. Monitora digitação, colagem e alterações em campos de formulário
+  // 1. Monitora digitação, colagem e alterações estritamente em campos de credenciais
   ['input', 'change', 'paste', 'keyup'].forEach(evt => {
     document.addEventListener(evt, (e) => {
       if (isAutoFilling) return;
       const target = e.target;
       if (!target) return;
 
-      const isPassField = target.type === 'password' || 
-                          (target.getAttribute('name') || '').toLowerCase().includes('pass') || 
-                          (target.getAttribute('id') || '').toLowerCase().includes('pass');
-
-      if (isPassField) {
+      if (isPasswordField(target)) {
         if (target.value && target.value.length >= 2) {
           if (!lastAutoFilledPassword || target.value !== lastAutoFilledPassword) {
             userExplicitlyTypedPassword = true;
           }
           sessionPassword = target.value;
+          activePasswordInput = target;
+          activeAuthForm = target.closest('form, [role="dialog"], [role="form"], .modal, .auth-box, .login-box, .card, main') || null;
           dismissedSet.clear();
           try {
             sessionStorage.removeItem('safepass_dismissed_' + window.location.hostname);
           } catch(e) {}
         }
-      } else if (target.type === 'email' || target.type === 'text' || target.type === 'tel') {
+      } else if (isExplicitUsernameField(target)) {
         const val = (target.value || '').trim();
-        if (val.includes('@') || (val.length >= 2 && isValidUsernameString(val))) {
+        if (val.length >= 1 && isValidUsernameString(val)) {
           sessionUsername = val;
+          sessionUsernameFromAuth = true;
         }
       }
     }, true);
   });
 
-  // 2. Ao sair do campo de senha (blur), garante os valores na sessão
-  document.addEventListener('blur', (e) => {
-    const target = e.target;
-    if (target && target.type === 'password' && target.value) {
-      sessionPassword = target.value;
-    }
-  }, true);
+  // 2. Ao sair do campo de senha (blur) ou clicar, garante os valores na sessão
+  ['blur', 'focusout', 'pointerdown', 'mousedown'].forEach(evt => {
+    document.addEventListener(evt, (e) => {
+      const target = e.target;
+      if (target && isPasswordField(target) && target.value) {
+        sessionPassword = target.value;
+        activePasswordInput = target;
+      }
+    }, true);
+  });
 
-  function showInlineSuccessToast(msg) {
-    const existing = document.getElementById('__safepass_toast_badge');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.id = '__safepass_toast_badge';
-    toast.style.cssText = `
-      position: fixed !important;
-      top: 24px !important;
-      left: 50% !important;
-      transform: translateX(-50%) translateY(-20px) !important;
-      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%) !important;
-      border: 1.5px solid #10b981 !important;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.8), 0 0 20px rgba(16, 185, 129, 0.4) !important;
-      border-radius: 30px !important;
-      padding: 10px 22px !important;
-      color: #ffffff !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-      font-size: 13.5px !important;
-      font-weight: 700 !important;
-      z-index: 2147483647 !important;
-      display: flex !important;
-      align-items: center !important;
-      gap: 10px !important;
-      pointer-events: none !important;
-      opacity: 0 !important;
-      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    `;
-    toast.innerHTML = `<span>🛡️</span> <span>${escapeHtml(msg)}</span>`;
-    document.body.appendChild(toast);
-
-    requestAnimationFrame(() => {
-      toast.style.opacity = '1';
-      toast.style.transform = 'translateX(-50%) translateY(0)';
-    });
-
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateX(-50%) translateY(-20px)';
-      setTimeout(() => toast.remove(), 350);
-    }, 4000);
-  }
-
-  function saveCredentialDirectly(toSave, showToastMsg = true) {
-    if (!toSave || !toSave.password) return;
-    if (!isExtensionValid()) return;
-
-    const domain = (toSave.domain || window.location.hostname).replace(/^www\./i, '').toLowerCase();
-
-    chrome.storage.local.get(['safepass_pending_vault_items', 'safepass_unlocked_vault_cache'], (res) => {
-      if (chrome.runtime.lastError || !isExtensionValid()) return;
-      let pending = res['safepass_pending_vault_items'] || [];
-      let cache = res['safepass_unlocked_vault_cache'] || [];
-
-      pending = pending.filter(p => !(isDomainMatch(p, domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
-      cache = cache.filter(p => !(isDomainMatch(p, domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
-
-      pending.unshift(toSave);
-      cache.unshift(toSave);
-
-      chrome.storage.local.set({
-        'safepass_pending_vault_items': pending,
-        'safepass_unlocked_vault_cache': cache,
-        'safepass_pending_prompt': null
-      }, () => {
-        try {
-          chrome.runtime.sendMessage({ action: 'save_credential', data: toSave });
-        } catch(e) {}
-        if (showToastMsg) {
-          showInlineSuccessToast(`SafePass: Login para ${toSave.title || domain} salvo com sucesso!`);
-        }
-      });
-    });
-  }
-
-  function triggerCapture(form, passwordInput) {
+  function triggerCapture(form, passwordInput, directPassVal) {
     if (shouldIgnoreCapture()) return;
-    let passVal = (passwordInput && passwordInput.value) ? passwordInput.value : '';
+    let passVal = (directPassVal || (passwordInput && passwordInput.value) || sessionPassword || '').trim();
     if (!passVal || passVal.length < 2) return;
 
-    // Se a senha for a que acabou de ser autopreenchida e o usuário não digitou outra: NÃO FAZ NADA!
+    // Se a senha for a que acabou de ser autopreenchida e o usuário não alterou nada: não re-captura
     if (lastAutoFilledPassword && lastAutoFilledPassword === passVal && !userExplicitlyTypedPassword) {
-      sessionPassword = '';
-      lastCaptured = null;
+      return;
+    }
+    // Não captura se o usuário nunca interagiu com um campo de senha
+    if (!userExplicitlyTypedPassword && lastAutoFilledPassword === passVal) {
       return;
     }
 
-    const username = findUsernameField(form, passwordInput) || sessionUsername || 'admin';
+    const username = findUsernameField(form, passwordInput) || (sessionUsernameFromAuth ? sessionUsername : '') || 'admin';
     const cleanTitle = extractCleanServiceName(window.location.href, document.title);
     const domain = window.location.hostname.replace(/^www\./i, '').toLowerCase();
 
-    if (!isExtensionValid()) return;
+    const cred = {
+      id: 'item_' + Date.now(),
+      type: 'login',
+      title: cleanTitle || domain,
+      url: window.location.href,
+      domain: domain,
+      username: username,
+      password: passVal,
+      notes: 'Salvo via extensão SafePass.',
+      favorite: false,
+      createdAt: Date.now(),
+      isUpdate: false,
+      timestamp: Date.now()
+    };
 
-    chrome.storage.local.get(['safepass_unlocked_vault_cache'], (res) => {
-      if (chrome.runtime.lastError || !isExtensionValid()) return;
-      const cache = res['safepass_unlocked_vault_cache'] || [];
+    lastCaptured = cred;
 
-      // 1. Verifica se já existe QUALQUER credencial salva para este domínio com a MESMA senha
-      const samePasswordMatch = cache.find(item => {
-        return isDomainMatch(item, domain) && item.password === passVal;
+    // 1. SALVAR DE FORMA TOTALMENTE SÍNCRONA NO SESSIONSTORAGE ANTES DE QUALQUER REDIRECIONAMENTO OU CALLBACK ASSÍNCRONO!
+    try {
+      sessionStorage.setItem('__safepass_pending_prompt', JSON.stringify(cred));
+      sessionStorage.setItem('__safepass_draft_cred', JSON.stringify(cred));
+    } catch(e) {}
+
+    // 2. Salva no storage local da extensão
+    if (isExtensionValid()) {
+      chrome.storage.local.set({ 'safepass_pending_prompt': cred });
+      try {
+        chrome.runtime.sendMessage({ action: 'set_pending_prompt', data: cred });
+      } catch(e) {}
+
+      chrome.storage.local.get(['safepass_unlocked_vault_cache'], (res) => {
+        if (chrome.runtime.lastError || !isExtensionValid()) return;
+        const cache = res['safepass_unlocked_vault_cache'] || [];
+
+        // 1. Verifica se já existe esta conta salva com a MESMA senha E mesmo usuário para este app/URL
+        const exactAccountMatch = cache.find(item => {
+          const uMatch = (item.username || '').trim().toLowerCase() === (username || '').trim().toLowerCase();
+          return isDomainMatch(item, window.location.href) && uMatch && item.password === passVal;
+        });
+
+        if (exactAccountMatch) {
+          // A conta com esse usuário e senha já está 100% atualizada no cofre!
+          lastCaptured = null;
+          sessionPassword = '';
+          userExplicitlyTypedPassword = false;
+          try {
+            sessionStorage.removeItem('__safepass_pending_prompt');
+            sessionStorage.removeItem('__safepass_draft_cred');
+          } catch(e) {}
+          chrome.storage.local.remove('safepass_pending_prompt');
+          return;
+        }
+
+        // 2. Procura se já existe credencial para este usuário neste app (Atualização vs Novo)
+        const existingUserMatch = cache.find(item => {
+          const uMatch = (item.username || '').trim().toLowerCase() === (username || '').trim().toLowerCase();
+          return uMatch && isDomainMatch(item, window.location.href);
+        });
+
+        if (existingUserMatch) {
+          cred.isUpdate = true;
+          cred.id = existingUserMatch.id;
+          cred.title = existingUserMatch.title || cred.title;
+          try {
+            sessionStorage.setItem('__safepass_pending_prompt', JSON.stringify(cred));
+          } catch(e) {}
+          chrome.storage.local.set({ 'safepass_pending_prompt': cred });
+        }
+
+        // Exibe o prompt flutuante na tela
+        showSavePasswordPrompt(cred);
       });
-
-      if (samePasswordMatch) {
-        // A senha já é conhecida e salva no cofre para este domínio! Silencia completamente.
-        lastCaptured = null;
-        sessionPassword = '';
-        userExplicitlyTypedPassword = false;
-        return;
-      }
-
-      // 2. Procura se já existe credencial para este usuário neste domínio (Atualização vs Novo)
-      const existingUserMatch = cache.find(item => {
-        const uMatch = (item.username || '').trim().toLowerCase() === (username || '').trim().toLowerCase();
-        return uMatch && isDomainMatch(item, domain);
-      });
-
-      const cred = {
-        id: existingUserMatch ? existingUserMatch.id : ('item_' + Date.now()),
-        type: 'login',
-        title: existingUserMatch ? existingUserMatch.title : (cleanTitle || domain),
-        url: window.location.href,
-        domain: domain,
-        username: username,
-        password: passVal,
-        notes: existingUserMatch ? (existingUserMatch.notes || '') : 'Salvo via extensão SafePass.',
-        favorite: existingUserMatch ? !!existingUserMatch.favorite : false,
-        createdAt: existingUserMatch ? (existingUserMatch.createdAt || Date.now()) : Date.now(),
-        isUpdate: !!existingUserMatch
-      };
-
-      lastCaptured = cred;
-
-      // Exibe o prompt apenas se for realmente nova conta ou senha alterada
+    } else {
       showSavePasswordPrompt(cred);
-    });
+    }
   }
 
-  // 3. Escuta submit de formulários com campo de senha
+  // 3. Escuta submit de formulários com campo de senha autêntico
   document.addEventListener('submit', (e) => {
     const form = e.target;
     if (!form || !form.querySelector) return;
-    const pass = form.querySelector('input[type="password"]');
-    if (pass && pass.value && pass.value.length >= 2) {
-      triggerCapture(form, pass);
+    const pass = form.querySelector('input[type="password"]') || (activePasswordInput && form.contains(activePasswordInput) ? activePasswordInput : null);
+    if (!pass) return;
+
+    const passVal = (pass.value || '').trim();
+    if (passVal && passVal.length >= 2 && userExplicitlyTypedPassword) {
+      triggerCapture(form, pass, passVal);
     }
   }, true);
 
-  // 4. Escuta cliques em botões de ação/login (Ignora abas internas, menus e botões de Logout)
+  // 4. Escuta cliques em botões de ação/login
   document.addEventListener('click', (e) => {
-    const btn = e.target.closest('button, input[type="submit"], input[type="button"], a, [role="button"]');
+    const btn = e.target.closest('button, input[type="submit"], input[type="button"], a, [role="button"], div[onclick], div[role="button"]');
     if (!btn) return;
 
     const btnText = ((btn.innerText || '') + ' ' + (btn.id || '') + ' ' + (btn.className || '') + ' ' + (btn.getAttribute('type') || '')).toLowerCase();
     
-    // Se for botão de Logout / Sair / Deslogar, limpa qualquer prompt e nunca captura
-    const isLogoutButton = /sair|logout|log out|sign ?out|desconectar|encerrar sess[aã]o|deslogar/i.test(btnText);
-    if (isLogoutButton) {
+    // Se for botão de Logout / Cancelar / Fechar, limpa qualquer prompt e ignora
+    const isCancelOrLogout = /sair|logout|log out|sign ?out|desconectar|encerrar sess[aã]o|deslogar|cancelar|cancel|fechar|close/i.test(btnText);
+    if (isCancelOrLogout) {
       userExplicitlyTypedPassword = false;
       sessionPassword = '';
+      sessionUsername = '';
+      sessionUsernameFromAuth = false;
+      activePasswordInput = null;
+      activeAuthForm = null;
       lastCaptured = null;
+      try {
+        sessionStorage.removeItem('__safepass_pending_prompt');
+        sessionStorage.removeItem('__safepass_draft_cred');
+      } catch(e) {}
       if (isExtensionValid()) {
         chrome.storage.local.remove('safepass_pending_prompt');
+        chrome.runtime.sendMessage({ action: 'clear_pending_prompt' }).catch(()=>{});
       }
       return;
     }
 
-    // Busca o campo de senha APENAS dentro do form do botão ou container imediato
+    // Se for botão de pedido, carrinho, busca, item, lavanderia, etc -> IGNORA TOTALMENTE!
+    if (isNonAuthButton(btn)) {
+      return;
+    }
+
+    // Só prossegue se o usuário digitou uma senha explicitamente nesta página
+    if (!userExplicitlyTypedPassword) {
+      return;
+    }
+
+    // Procura o campo de senha no form ou container exclusivo do botão
     const form = btn.closest('form');
-    let pass = null;
-    if (form) {
-      pass = form.querySelector('input[type="password"]');
-    } else {
-      const container = btn.closest('div, section, main, [role="dialog"], [role="form"]');
+    let pass = form ? form.querySelector('input[type="password"]') : null;
+    
+    if (!pass) {
+      const container = btn.closest('[role="dialog"], [role="form"], .modal, .auth-box, .login-box, .login-container');
       if (container) {
         pass = container.querySelector('input[type="password"]');
       }
     }
 
-    // Se NÃO houver campo de senha com valor preenchido na área deste botão, NÃO FAZ NADA!
-    if (!pass || !pass.value || pass.value.length < 2) {
-      return;
+    if (!pass && activeAuthForm && (form === activeAuthForm || activeAuthForm.contains(btn))) {
+      pass = activePasswordInput;
     }
 
-    // Se o campo estiver invisível (ex: modal fechado), ignora
-    if (pass.offsetParent === null && pass.type !== 'password') {
-      return;
-    }
+    if (!pass) return; // NUNCA captura de botões que não pertencem ao formulário de autenticação
 
-    const isLoginButton = /entrar|login|log in|sign ?in|sign ?up|acessar|logar|autenticar|cadastrar|cadastro|conectar|submit|iniciar sess[aã]o/i.test(btnText);
-    const isSubmitType = btn.getAttribute('type') === 'submit';
+    const passVal = (pass.value || sessionPassword || '').trim();
+    if (!passVal || passVal.length < 2) return;
 
-    if (isLoginButton || isSubmitType || userExplicitlyTypedPassword) {
-      triggerCapture(form || pass.closest('form') || pass.parentElement, pass);
-    }
+    triggerCapture(form || (pass && pass.closest ? pass.closest('form') : null), pass, passVal);
   }, true);
 
   // 5. Escuta tecla Enter nos inputs de login
@@ -677,69 +795,100 @@ if (isSafePassWebPage) {
     if (e.key === 'Enter') {
       const target = e.target;
       if (!target) return;
+      if (!userExplicitlyTypedPassword) return;
+
       const form = target.closest('form');
-      const pass = form ? form.querySelector('input[type="password"]') : (target.type === 'password' ? target : null);
-      if (pass && pass.value && pass.value.length >= 2) {
-        triggerCapture(form || pass.closest('form') || pass.parentElement, pass);
+      let pass = form ? form.querySelector('input[type="password"]') : null;
+      if (!pass && isPasswordField(target)) pass = target;
+      if (!pass && activeAuthForm && (form === activeAuthForm || activeAuthForm.contains(target))) {
+        pass = activePasswordInput;
+      }
+      
+      if (!pass) return;
+
+      const passVal = (pass.value || sessionPassword || '').trim();
+      if (passVal && passVal.length >= 2) {
+        triggerCapture(form || (pass && pass.closest ? pass.closest('form') : null), pass, passVal);
       }
     }
   }, true);
 
-  // 6. Salva antes de descarregar a página caso haja redirecionamento (APENAS se o usuário digitou uma nova senha)
+  // 6. Salva antes de descarregar a página caso haja redirecionamento de login legítimo
   window.addEventListener('beforeunload', () => {
-    if (userExplicitlyTypedPassword && sessionPassword && sessionPassword.length >= 2 && isExtensionValid()) {
-      const username = sessionUsername || 'admin';
-      const cleanTitle = extractCleanServiceName(window.location.href, document.title);
-      chrome.storage.local.set({
-        'safepass_pending_prompt': {
-          username,
-          password: sessionPassword,
-          url: window.location.href,
-          domain: window.location.hostname.replace(/^www\./i, '').toLowerCase(),
-          title: cleanTitle,
-          timestamp: Date.now()
-        }
-      });
+    if (userExplicitlyTypedPassword && sessionPassword && sessionPassword.length >= 2 && lastCaptured) {
+      try {
+        sessionStorage.setItem('__safepass_pending_prompt', JSON.stringify(lastCaptured));
+        sessionStorage.setItem('__safepass_draft_cred', JSON.stringify(lastCaptured));
+      } catch(e) {}
+      if (isExtensionValid()) {
+        chrome.storage.local.set({ 'safepass_pending_prompt': lastCaptured });
+      }
     }
   });
 
-  // 7. Verifica se há prompt pendente após redirecionamento de login
-  if (isExtensionValid()) {
+  // 7. Verifica se há prompt pendente após redirecionamento de login (sessionStorage + storage local + background)
+  function checkPendingPromptOnPageLoad() {
+    if (!isExtensionValid()) return;
+    if (shouldIgnoreCapture()) return;
+
+    let sessionPending = null;
+    try {
+      const raw = sessionStorage.getItem('__safepass_pending_prompt') || sessionStorage.getItem('__safepass_draft_cred');
+      if (raw) sessionPending = JSON.parse(raw);
+    } catch(e) {}
+
     chrome.storage.local.get(['safepass_pending_prompt', 'safepass_unlocked_vault_cache'], (res) => {
       if (chrome.runtime.lastError || !isExtensionValid()) return;
-      const p = res['safepass_pending_prompt'];
+      const p = sessionPending || res['safepass_pending_prompt'];
       const cache = res['safepass_unlocked_vault_cache'] || [];
 
-      if (p && p.password && (Date.now() - p.timestamp < 30000)) {
+      if (p && p.password && (Date.now() - (p.timestamp || 0) < 90000)) {
         const curDomain = window.location.hostname.replace(/^www\./i, '').toLowerCase();
-        if (p.domain && (curDomain.includes(p.domain) || p.domain.includes(curDomain))) {
-          chrome.storage.local.remove('safepass_pending_prompt');
+        const pDomain = (p.domain || '').replace(/^www\./i, '').toLowerCase();
 
-          // 1. Verifica no cache se o item já está salvo com a mesma senha para este domínio
+        if (curDomain && pDomain && (curDomain.includes(pDomain) || pDomain.includes(curDomain))) {
+          // 1. Verifica no cache se o item já está salvo com a mesma senha e usuário para este app/URL
           const exactMatch = cache.find(item => {
-            return isDomainMatch(item, p.domain || curDomain) && item.password === p.password;
+            const uMatch = (item.username || '').trim().toLowerCase() === (p.username || '').trim().toLowerCase();
+            return isDomainMatch(item, p.url || window.location.href) && uMatch && item.password === p.password;
           });
 
           if (exactMatch) {
-            // Já está salvo e a senha é idêntica! Não exibe nada
+            try {
+              sessionStorage.removeItem('__safepass_pending_prompt');
+              sessionStorage.removeItem('__safepass_draft_cred');
+            } catch(e) {}
+            chrome.storage.local.remove('safepass_pending_prompt');
             return;
           }
 
           // Verifica se é atualização
           const existingUserMatch = cache.find(item => {
             const uMatch = (item.username || '').trim().toLowerCase() === (p.username || '').trim().toLowerCase();
-            return uMatch && isDomainMatch(item, p.domain || curDomain);
+            return uMatch && isDomainMatch(item, p.url || window.location.href);
           });
 
           p.isUpdate = !!existingUserMatch;
+          if (existingUserMatch) {
+            p.id = existingUserMatch.id;
+            p.title = existingUserMatch.title || p.title;
+          }
 
           if (!dismissedSet.has(p.password)) {
-            setTimeout(() => showSavePasswordPrompt(p), 600);
+            showSavePasswordPrompt(p);
           }
         }
       }
     });
   }
+
+  // Executa checagem de prompt pendente nos momentos adequados
+  setTimeout(checkPendingPromptOnPageLoad, 400);
+  window.addEventListener('DOMContentLoaded', () => setTimeout(checkPendingPromptOnPageLoad, 300));
+  window.addEventListener('load', () => setTimeout(checkPendingPromptOnPageLoad, 300));
+  window.addEventListener('pageshow', () => setTimeout(checkPendingPromptOnPageLoad, 300));
+  window.addEventListener('popstate', () => setTimeout(checkPendingPromptOnPageLoad, 300));
+  window.addEventListener('hashchange', () => setTimeout(checkPendingPromptOnPageLoad, 300));
 
   // Renderiza o Banner Flutuante de Salvar Senha
   function showSavePasswordPrompt(data) {
@@ -751,7 +900,7 @@ if (isSafePassWebPage) {
 
     const host = document.createElement('div');
     host.id = '__safepass_save_container';
-    host.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; pointer-events: auto;';
+    host.style.cssText = 'position: fixed !important; top: 20px !important; right: 20px !important; z-index: 2147483647 !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; pointer-events: auto !important;';
     
     const shadow = host.attachShadow({ mode: 'open' });
     
@@ -759,11 +908,11 @@ if (isSafePassWebPage) {
       <style>
         .safepass-prompt-box {
           background: #0d1322;
-          border: 1px solid rgba(109, 74, 255, 0.5);
+          border: 1.5px solid rgba(109, 74, 255, 0.6);
           border-radius: 14px;
           padding: 16px 18px;
           width: 310px;
-          box-shadow: 0 12px 40px rgba(0,0,0,0.85), 0 0 25px rgba(109, 74, 255, 0.35);
+          box-shadow: 0 12px 40px rgba(0,0,0,0.85), 0 0 25px rgba(109, 74, 255, 0.4);
           color: #f8fafc;
           box-sizing: border-box;
           animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -812,14 +961,6 @@ if (isSafePassWebPage) {
           margin-bottom: 14px;
           font-size: 12px;
         }
-        .info-row {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 4px;
-        }
-        .info-row:last-child { margin-bottom: 0; }
-        .info-label { color: #64748b; }
-        .info-val { color: #fff; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
         .actions {
           display: flex;
           gap: 8px;
@@ -927,6 +1068,8 @@ if (isSafePassWebPage) {
     const closePrompt = () => {
       try {
         sessionStorage.setItem('safepass_dismissed_' + window.location.hostname, 'true');
+        sessionStorage.removeItem('__safepass_pending_prompt');
+        sessionStorage.removeItem('__safepass_draft_cred');
       } catch(e) {}
       if (data && data.password) dismissedSet.add(data.password);
       dismissedSet.add(window.location.hostname);
@@ -937,6 +1080,7 @@ if (isSafePassWebPage) {
       try {
         if (isExtensionValid()) {
           chrome.storage.local.remove('safepass_pending_prompt');
+          chrome.runtime.sendMessage({ action: 'clear_pending_prompt' }).catch(()=>{});
         }
       } catch(e) {}
       host.style.transition = 'opacity 0.2s, transform 0.2s';
@@ -994,6 +1138,8 @@ if (isSafePassWebPage) {
 
       try {
         sessionStorage.setItem('safepass_dismissed_' + window.location.hostname, 'true');
+        sessionStorage.removeItem('__safepass_pending_prompt');
+        sessionStorage.removeItem('__safepass_draft_cred');
       } catch(e) {}
       if (editedPass) dismissedSet.add(editedPass);
       dismissedSet.add(window.location.hostname);
@@ -1005,8 +1151,8 @@ if (isSafePassWebPage) {
             let pending = res['safepass_pending_vault_items'] || [];
             let cache = res['safepass_unlocked_vault_cache'] || [];
 
-            pending = pending.filter(p => !(isDomainMatch(p, toSave.domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
-            cache = cache.filter(p => !(isDomainMatch(p, toSave.domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
+            pending = pending.filter(p => !(isDomainMatch(p, toSave.url || toSave.domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
+            cache = cache.filter(p => !(isDomainMatch(p, toSave.url || toSave.domain) && (p.username || '').trim().toLowerCase() === (toSave.username || '').trim().toLowerCase()));
 
             pending.unshift(toSave);
             cache.unshift(toSave);
@@ -1018,6 +1164,7 @@ if (isSafePassWebPage) {
             }, () => {
               try {
                 chrome.runtime.sendMessage({ action: 'save_credential', data: toSave });
+                chrome.runtime.sendMessage({ action: 'clear_pending_prompt' });
               } catch(e) {}
             });
           });
@@ -1047,7 +1194,8 @@ if (isSafePassWebPage) {
 
   function scanAndAttachInputs() {
     const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])')).filter(el => {
-      if (el.offsetParent === null || el.disabled || el.readOnly) return false;
+      if (!isElementVisible(el)) return false;
+      if (isSearchOrNonAuthField(el)) return false;
       if (el.type === 'password') return true;
       if (el.type === 'email') return true;
       const name = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('autocomplete') || '')).toLowerCase();
@@ -1072,12 +1220,12 @@ if (isSafePassWebPage) {
     chrome.storage.local.get(['safepass_unlocked_vault_cache'], (res) => {
       if (chrome.runtime.lastError || !isExtensionValid()) return;
       const cache = res['safepass_unlocked_vault_cache'] || [];
-      const matches = cache.filter(item => isDomainMatch(item, domain));
+      const matches = cache.filter(item => isDomainMatch(item, window.location.href || domain));
 
       if (matches.length === 1) {
         const item = matches[0];
-        const passInput = document.querySelector('input[type="password"]');
-        if (passInput && (!passInput.value || passInput.value.length === 0)) {
+        const passInputs = Array.from(document.querySelectorAll('input[type="password"]')).filter(isElementVisible);
+        if (passInputs.length > 0 && (!passInputs[0].value || passInputs[0].value.length === 0)) {
           performAutoFill(item.username, item.password);
         }
       }
@@ -1269,6 +1417,21 @@ if (isSafePassWebPage) {
         logins.forEach(item => {
           const card = document.createElement('div');
           card.className = '__sp_match_card';
+          
+          let displayUrl = '';
+          if (item.url) {
+            try {
+              const u = new URL(item.url.startsWith('http') ? item.url : 'https://' + item.url);
+              const host = u.hostname.replace(/^www\./i, '');
+              const path = u.pathname.replace(/\/$/, '');
+              displayUrl = host + (path && path !== '/' ? path : '');
+            } catch(e) {
+              displayUrl = item.url.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+            }
+          } else {
+            displayUrl = item.domain || window.location.hostname;
+          }
+
           card.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: space-between;">
               <span style="font-weight: 700; color: #fff; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px;">
@@ -1278,8 +1441,10 @@ if (isSafePassWebPage) {
                 ⚡ Preencher
               </span>
             </div>
-            <div style="font-size: 10.5px; color: #94a3b8; margin-top: 2px;">
-              ${escapeHtml(item.title || item.domain || window.location.hostname)}
+            <div style="font-size: 11px; color: #38bdf8; margin-top: 3px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 4px;">
+              <span>🌐</span>
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(displayUrl)}</span>
+              ${(item.title && item.title !== displayUrl && !displayUrl.includes(item.title) && item.title !== item.domain) ? `<span style="color: #94a3b8; font-weight: 400; font-size: 10px; margin-left: 2px;">• ${escapeHtml(item.title)}</span>` : ''}
             </div>
           `;
 
@@ -1315,20 +1480,22 @@ if (isSafePassWebPage) {
             e.stopPropagation();
             e.preventDefault();
             dropdown.remove();
-            const passVal = input.value || sessionPassword || '';
+            const passVal = input.value || '';
             const cred = {
               id: 'item_' + Date.now(),
               type: 'login',
-              title: extractCleanServiceName(window.location.href, document.title) || domain,
+              title: window.location.hostname,
               url: window.location.href,
               domain: domain,
-              username: sessionUsername || 'admin',
+              username: 'admin',
               password: passVal,
               notes: 'Salvo via extensão SafePass.',
               favorite: false,
               createdAt: Date.now()
             };
-            saveCredentialDirectly(cred, true);
+            if (isExtensionValid()) {
+              chrome.runtime.sendMessage({ action: 'save_credential', data: cred });
+            }
           };
         }
       }
@@ -1336,6 +1503,7 @@ if (isSafePassWebPage) {
 
     // Consulta senhas correspondentes ao domínio atual
     const domain = window.location.hostname.replace(/^www\./i, '').toLowerCase();
+    const currentUrl = window.location.href;
     if (isExtensionValid()) {
       chrome.storage.local.get(['safepass_unlocked_vault_cache', 'safepass_pending_vault_items'], (res) => {
         if (chrome.runtime.lastError || !isExtensionValid()) return;
@@ -1346,7 +1514,7 @@ if (isSafePassWebPage) {
         const added = new Set();
 
         combined.forEach(item => {
-          if (isDomainMatch(item, domain)) {
+          if (isDomainMatch(item, currentUrl || domain)) {
             const key = (item.username || '') + '|' + (item.password || '');
             if (!added.has(key)) {
               added.add(key);
@@ -1359,7 +1527,7 @@ if (isSafePassWebPage) {
           renderDropdownLogins(localMatches);
         } else {
           // Consulta background
-          chrome.runtime.sendMessage({ action: 'get_matched_logins', domain }, (bRes) => {
+          chrome.runtime.sendMessage({ action: 'get_matched_logins', domain: currentUrl || domain }, (bRes) => {
             if (chrome.runtime.lastError || !isExtensionValid()) return;
             const logins = (bRes && bRes.logins) ? bRes.logins : [];
             renderDropdownLogins(logins);

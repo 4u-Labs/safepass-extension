@@ -42,10 +42,15 @@ async function encryptData(obj, key) {
 }
 
 async function decryptData(encrypted, key) {
-  const iv = hexToBuffer(encrypted.iv);
-  const ciphertext = hexToBuffer(encrypted.data);
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, key, ciphertext);
-  return JSON.parse(dec.decode(decrypted));
+  if (!encrypted || !encrypted.iv || !encrypted.data || !key) return null;
+  try {
+    const iv = hexToBuffer(encrypted.iv);
+    const ciphertext = hexToBuffer(encrypted.data);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, key, ciphertext);
+    return JSON.parse(dec.decode(decrypted));
+  } catch (err) {
+    return null;
+  }
 }
 
 function getTimeoutDuration(pref) {
@@ -319,7 +324,8 @@ function checkAuth() {
         if (test === 'VERIFIER_OK') {
           masterKey = key;
           currentMasterPass = sessionPass;
-          vault = (cachedVault && cachedVault.length > 0) ? cachedVault : await decryptData(parsed.payload, key);
+          const decVault = await decryptData(parsed.payload, key);
+          vault = (decVault && Array.isArray(decVault)) ? decVault : ((cachedVault && cachedVault.length > 0) ? cachedVault : []);
           
           // Renova expiração com base no tempo configurado
           const newExpiresAt = Date.now() + getTimeoutDuration(timeoutPref);
@@ -508,9 +514,32 @@ function triggerManualSync(silent = false) {
         if (pullData.vault_data && pullData.vault_data.payload) {
           const serverVault = pullData.vault_data;
           
-          if (masterKey) {
+          if (currentMasterPass && serverVault.salt) {
+            try {
+              const salt = new Uint8Array(hexToBuffer(serverVault.salt));
+              const syncKey = await deriveKey(currentMasterPass, salt);
+              const test = await decryptData(serverVault.verifier, syncKey);
+              if (test === 'VERIFIER_OK') {
+                const serverItems = await decryptData(serverVault.payload, syncKey);
+                if (serverItems && Array.isArray(serverItems)) {
+                  const { merged, hasLocalNewItems } = mergeVaultLists(vault, serverItems);
+                  vault = merged;
+                  masterKey = syncKey;
+                  chrome.storage.local.set({
+                    'safepass_unlocked_vault_cache': vault,
+                    [STORAGE_KEY]: JSON.stringify(serverVault)
+                  });
+                  renderItemsList();
+                  if (vault.length > 0 && !selectedItemId) renderItemDetail(vault[0]);
+                  if (hasLocalNewItems) {
+                    saveVaultToStorage();
+                  }
+                }
+              }
+            } catch(e) {}
+          } else if (masterKey) {
             const serverItems = await decryptData(serverVault.payload, masterKey);
-            if (Array.isArray(serverItems)) {
+            if (serverItems && Array.isArray(serverItems)) {
               const { merged, hasLocalNewItems } = mergeVaultLists(vault, serverItems);
               vault = merged;
               chrome.storage.local.set({
@@ -949,25 +978,92 @@ function lockVault() {
   showToast('Cofre bloqueado com segurança.');
 }
 
-function isDomainMatch(item, targetDomain) {
-  if (!item) return false;
-  const target = (targetDomain || '').replace(/^www\./i, '').toLowerCase();
-
-  // 1. Testa URL
-  if (item.url) {
+function getAppPathKey(urlStr, titleStr = '', userStr = '') {
+  if (urlStr) {
     try {
-      const itemUrl = item.url.startsWith('http') ? item.url : 'https://' + item.url;
-      const parsed = new URL(itemUrl);
-      const itemHost = parsed.hostname.replace(/^www\./i, '').toLowerCase();
-      if (itemHost === target || itemHost.endsWith('.' + target) || target.endsWith('.' + itemHost)) return true;
-    } catch(e) {
-      if (item.url.toLowerCase().includes(target)) return true;
+      const u = new URL((urlStr && urlStr.startsWith('http')) ? urlStr : 'https://' + (urlStr || ''));
+      const segs = u.pathname.split('/').filter(Boolean);
+      const clean = segs.filter(s => !s.match(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i));
+      if (clean.length > 0) {
+        if (clean[0] === 'app' && clean.length > 1) return 'app/' + clean[1].toLowerCase();
+        return clean[0].toLowerCase();
+      }
+    } catch(e) {}
+  }
+
+  const text = ((urlStr || '') + ' ' + (titleStr || '') + ' ' + (userStr || '')).toLowerCase();
+  
+  const pathMatch = text.match(/(?:\.br|\.com|\.net|\.org|\.io)?\/([a-z0-9_-]+(?:\/[a-z0-9_-]+)?)/i);
+  if (pathMatch && pathMatch[1]) {
+    const rawP = pathMatch[1].toLowerCase();
+    const cleanP = rawP.replace(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i, '').replace(/\/$/, '');
+    if (cleanP && !cleanP.includes('.') && cleanP.length > 1) {
+      if (cleanP.startsWith('app/') || !cleanP.includes('/')) return cleanP;
     }
   }
 
-  // 2. Testa Título / Domínio
-  if (item.title && item.title.toLowerCase().includes(target)) return true;
-  if (item.domain && (item.domain.toLowerCase() === target || target.includes(item.domain.toLowerCase()))) return true;
+  const appHints = ['zap', 'lovechat', 'loja', 'ofertas', 'safepass', 'chat', 'bot', 'store', 'mail', 'blog'];
+  for (const hint of appHints) {
+    if (text.includes('(' + hint + ')') || text.includes('— ' + hint) || text.includes('- ' + hint) || text.includes('/' + hint) || text.includes(' ' + hint)) {
+      return (hint === 'zap' || hint === 'lovechat') ? ('app/' + hint) : hint;
+    }
+  }
+
+  return '';
+}
+
+function isDomainMatch(item, targetDomainOrUrl) {
+  if (!item) return false;
+  
+  let targetHost = '';
+  let targetPathKey = '';
+  
+  try {
+    const tUrl = (targetDomainOrUrl && targetDomainOrUrl.startsWith('http')) ? targetDomainOrUrl : 'https://' + (targetDomainOrUrl || '');
+    const pTarget = new URL(tUrl);
+    targetHost = pTarget.hostname.replace(/^www\./i, '').toLowerCase();
+    targetPathKey = getAppPathKey(tUrl);
+  } catch(e) {
+    targetHost = (targetDomainOrUrl || '').replace(/^www\./i, '').toLowerCase();
+  }
+
+  const itemUrl = item.url ? (item.url.startsWith('http') ? item.url : 'https://' + item.url) : '';
+  let itemHost = '';
+  let itemPathKey = '';
+  
+  if (itemUrl) {
+    try {
+      const pItem = new URL(itemUrl);
+      itemHost = pItem.hostname.replace(/^www\./i, '').toLowerCase();
+      itemPathKey = getAppPathKey(itemUrl, item.title, item.username);
+    } catch(e) {
+      itemHost = (item.url || '').toLowerCase();
+      itemPathKey = getAppPathKey('', item.title, item.username);
+    }
+  } else if (item.domain) {
+    itemHost = item.domain.replace(/^www\./i, '').toLowerCase();
+    itemPathKey = getAppPathKey('', item.title, item.username);
+  } else {
+    itemPathKey = getAppPathKey('', item.title, item.username);
+  }
+
+  const hostMatches = (itemHost && targetHost) && (itemHost === targetHost || itemHost.endsWith('.' + targetHost) || targetHost.endsWith('.' + itemHost));
+  
+  if (hostMatches) {
+    // If target is inside a specific sub-app (e.g. app/zap, loja)
+    if (targetPathKey) {
+      if (!itemPathKey) return false;
+      const normTarget = targetPathKey.replace(/^app\//, '');
+      const normItem = itemPathKey.replace(/^app\//, '');
+      return normTarget === normItem || targetPathKey === itemPathKey;
+    }
+    
+    // If target has NO specific sub-app path (root domain)
+    if (!targetPathKey) {
+      if (itemPathKey) return false;
+      return true;
+    }
+  }
 
   return false;
 }

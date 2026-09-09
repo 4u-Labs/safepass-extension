@@ -44,18 +44,18 @@
       </div>
 
       <!-- DESBLOQUEIO COM SENHA MESTRA / LOGIN DIRETO -->
-      <form id="auth-form">
+      <form id="auth-form" autocomplete="off">
         <div class="form-group" id="email-group" style="display: none;">
           <label class="form-label" for="auth-email">Seu E-mail</label>
           <div class="input-wrap">
-            <input type="email" id="auth-email" class="input-field" placeholder="seuemail@gmail.com" autocomplete="email">
+            <input type="email" id="auth-email" class="input-field" placeholder="seuemail@gmail.com" autocomplete="off" spellcheck="false">
           </div>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="master-pass">Senha Mestra</label>
           <div class="input-wrap">
-            <input type="password" id="master-pass" class="input-field" placeholder="Sua senha mestra..." required autofocus>
+            <input type="password" id="master-pass" class="input-field" placeholder="Sua senha mestra..." autocomplete="new-password" spellcheck="false" required autofocus>
             <button type="button" class="btn-toggle-eye" id="toggle-master">👁️</button>
           </div>
         </div>
@@ -63,7 +63,7 @@
         <div class="form-group" id="confirm-pass-group" style="display: none;">
           <label class="form-label" for="confirm-pass">Confirmar Senha Mestra</label>
           <div class="input-wrap">
-            <input type="password" id="confirm-pass" class="input-field" placeholder="Repita a senha...">
+            <input type="password" id="confirm-pass" class="input-field" placeholder="Repita a senha..." autocomplete="new-password" spellcheck="false">
             <button type="button" class="btn-toggle-eye" id="toggle-confirm">👁️</button>
           </div>
         </div>

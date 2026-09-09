@@ -27,10 +27,15 @@ async function deriveKey(password, salt) {
 }
 
 async function decryptData(encrypted, key) {
-  const iv = hexToBuffer(encrypted.iv);
-  const ciphertext = hexToBuffer(encrypted.data);
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, key, ciphertext);
-  return JSON.parse(dec.decode(decrypted));
+  if (!encrypted || !encrypted.iv || !encrypted.data || !key) return null;
+  try {
+    const iv = hexToBuffer(encrypted.iv);
+    const ciphertext = hexToBuffer(encrypted.data);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, key, ciphertext);
+    return JSON.parse(dec.decode(decrypted));
+  } catch (err) {
+    return null;
+  }
 }
 
 async function encryptData(data, key) {
@@ -90,25 +95,92 @@ if (chrome.runtime.onStartup) {
   });
 }
 
-function isDomainMatch(item, targetDomain) {
-  if (!item) return false;
-  const target = (targetDomain || '').replace(/^www\./i, '').toLowerCase();
-
-  // 1. Testa URL
-  if (item.url) {
+function getAppPathKey(urlStr, titleStr = '', userStr = '') {
+  if (urlStr) {
     try {
-      const itemUrl = item.url.startsWith('http') ? item.url : 'https://' + item.url;
-      const parsed = new URL(itemUrl);
-      const itemHost = parsed.hostname.replace(/^www\./i, '').toLowerCase();
-      if (itemHost === target || itemHost.endsWith('.' + target) || target.endsWith('.' + itemHost)) return true;
-    } catch(e) {
-      if (item.url.toLowerCase().includes(target)) return true;
+      const u = new URL((urlStr && urlStr.startsWith('http')) ? urlStr : 'https://' + (urlStr || ''));
+      const segs = u.pathname.split('/').filter(Boolean);
+      const clean = segs.filter(s => !s.match(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i));
+      if (clean.length > 0) {
+        if (clean[0] === 'app' && clean.length > 1) return 'app/' + clean[1].toLowerCase();
+        return clean[0].toLowerCase();
+      }
+    } catch(e) {}
+  }
+
+  const text = ((urlStr || '') + ' ' + (titleStr || '') + ' ' + (userStr || '')).toLowerCase();
+  
+  const pathMatch = text.match(/(?:\.br|\.com|\.net|\.org|\.io)?\/([a-z0-9_-]+(?:\/[a-z0-9_-]+)?)/i);
+  if (pathMatch && pathMatch[1]) {
+    const rawP = pathMatch[1].toLowerCase();
+    const cleanP = rawP.replace(/^(login|signin|auth|index|admin|entrar|wp-login|cadastrar|register)(\.(php|html|htm|jsp|asp|aspx))?$/i, '').replace(/\/$/, '');
+    if (cleanP && !cleanP.includes('.') && cleanP.length > 1) {
+      if (cleanP.startsWith('app/') || !cleanP.includes('/')) return cleanP;
     }
   }
 
-  // 2. Testa Título / Domínio
-  if (item.title && item.title.toLowerCase().includes(target)) return true;
-  if (item.domain && (item.domain.toLowerCase() === target || target.includes(item.domain.toLowerCase()))) return true;
+  const appHints = ['zap', 'lovechat', 'loja', 'ofertas', 'safepass', 'chat', 'bot', 'store', 'mail', 'blog'];
+  for (const hint of appHints) {
+    if (text.includes('(' + hint + ')') || text.includes('— ' + hint) || text.includes('- ' + hint) || text.includes('/' + hint) || text.includes(' ' + hint)) {
+      return (hint === 'zap' || hint === 'lovechat') ? ('app/' + hint) : hint;
+    }
+  }
+
+  return '';
+}
+
+function isDomainMatch(item, targetDomainOrUrl) {
+  if (!item) return false;
+  
+  let targetHost = '';
+  let targetPathKey = '';
+  
+  try {
+    const tUrl = (targetDomainOrUrl && targetDomainOrUrl.startsWith('http')) ? targetDomainOrUrl : 'https://' + (targetDomainOrUrl || '');
+    const pTarget = new URL(tUrl);
+    targetHost = pTarget.hostname.replace(/^www\./i, '').toLowerCase();
+    targetPathKey = getAppPathKey(tUrl);
+  } catch(e) {
+    targetHost = (targetDomainOrUrl || '').replace(/^www\./i, '').toLowerCase();
+  }
+
+  const itemUrl = item.url ? (item.url.startsWith('http') ? item.url : 'https://' + item.url) : '';
+  let itemHost = '';
+  let itemPathKey = '';
+  
+  if (itemUrl) {
+    try {
+      const pItem = new URL(itemUrl);
+      itemHost = pItem.hostname.replace(/^www\./i, '').toLowerCase();
+      itemPathKey = getAppPathKey(itemUrl, item.title, item.username);
+    } catch(e) {
+      itemHost = (item.url || '').toLowerCase();
+      itemPathKey = getAppPathKey('', item.title, item.username);
+    }
+  } else if (item.domain) {
+    itemHost = item.domain.replace(/^www\./i, '').toLowerCase();
+    itemPathKey = getAppPathKey('', item.title, item.username);
+  } else {
+    itemPathKey = getAppPathKey('', item.title, item.username);
+  }
+
+  const hostMatches = (itemHost && targetHost) && (itemHost === targetHost || itemHost.endsWith('.' + targetHost) || targetHost.endsWith('.' + itemHost));
+  
+  if (hostMatches) {
+    // If target is inside a specific sub-app (e.g. app/zap, loja)
+    if (targetPathKey) {
+      if (!itemPathKey) return false;
+      const normTarget = targetPathKey.replace(/^app\//, '');
+      const normItem = itemPathKey.replace(/^app\//, '');
+      return normTarget === normItem || targetPathKey === itemPathKey;
+    }
+    
+    // If target has NO specific sub-app path (root domain)
+    if (!targetPathKey) {
+      if (itemPathKey) return false;
+      return true;
+    }
+  }
 
   return false;
 }
@@ -135,7 +207,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       let cache = res['safepass_unlocked_vault_cache'] || [];
 
       // Remove qualquer entrada anterior deste mesmo usuário/domínio
-      pending = pending.filter(p => !(p.url === cred.url && (p.username || '').trim().toLowerCase() === (cred.username || '').trim().toLowerCase()));
+      pending = pending.filter(p => !(isDomainMatch(p, cred.url || cred.domain) && (p.username || '').trim().toLowerCase() === (cred.username || '').trim().toLowerCase()));
 
       const newItem = {
         id: cred.id || ('item_' + Date.now()),
@@ -156,6 +228,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const cacheIdx = cache.findIndex(p => isDomainMatch(p, cred.domain || cred.url) && (p.username || '').trim().toLowerCase() === (cred.username || '').trim().toLowerCase());
       if (cacheIdx >= 0) {
         cache[cacheIdx].password = cred.password;
+        cache[cacheIdx].title = cred.title || cache[cacheIdx].title;
+        cache[cacheIdx].url = cred.url || cache[cacheIdx].url;
         cache[cacheIdx].updatedAt = Date.now();
       } else {
         cache.unshift(newItem);
@@ -306,5 +380,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
     });
     return true;
+  } else if (request.action === 'set_pending_prompt') {
+    const p = request.data ? { ...request.data, timestamp: Date.now() } : null;
+    chrome.storage.local.set({ 'safepass_pending_prompt': p }, () => {
+      sendResponse({ success: true });
+    });
+    return true;
+  } else if (request.action === 'get_pending_prompt') {
+    chrome.storage.local.get(['safepass_pending_prompt'], (res) => {
+      sendResponse({ prompt: res['safepass_pending_prompt'] || null });
+    });
+    return true;
+  } else if (request.action === 'clear_pending_prompt') {
+    chrome.storage.local.remove('safepass_pending_prompt', () => {
+      sendResponse({ success: true });
+    });
+    return true;
   }
 });
+
