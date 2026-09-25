@@ -431,7 +431,7 @@ function resolveActiveEmail(res) {
     const itemWithEmail = vault.find(i => i.username && i.username.includes('@'));
     if (itemWithEmail) email = itemWithEmail.username;
   }
-  return (email || 'fbr4g4@gmail.com').toLowerCase().trim();
+  return (email || '').toLowerCase().trim();
 }
 
 function mergeVaultLists(localList, remoteList) {
